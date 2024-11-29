@@ -1,0 +1,178 @@
+-- Audio Injector Module with Hub UI
+local AudioInjector = {}
+
+-- Services
+local RunService = game:GetService("RunService")
+local SoundService = game:GetService("SoundService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+-- Constants
+local MAX_QUEUE_SIZE = 100
+local DEFAULT_VOLUME = 1
+local MEMORY_ADDRESSES = {}
+
+-- UI Elements
+local PlayerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
+local AudioHub = Instance.new("ScreenGui", PlayerGui)
+AudioHub.Name = "AudioHub"
+
+-- Create Hub Frame
+local HubFrame = Instance.new("Frame", AudioHub)
+HubFrame.Size = UDim2.new(0, 300, 0, 200)
+HubFrame.Position = UDim2.new(0.5, -150, 0.5, -100)
+HubFrame.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+HubFrame.BorderSizePixel = 0
+HubFrame.Visible = true
+
+-- Title
+local Title = Instance.new("TextLabel", HubFrame)
+Title.Size = UDim2.new(1, 0, 0, 30)
+Title.Text = "Audio Injector Hub"
+Title.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+Title.TextColor3 = Color3.new(1, 1, 1)
+Title.TextScaled = true
+Title.Font = Enum.Font.SourceSansBold
+Title.BorderSizePixel = 0
+
+-- Dragging Logic
+local dragging = false
+local dragStart, startPos
+
+HubFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = true
+        dragStart = input.Position
+        startPos = HubFrame.Position
+    end
+end)
+
+HubFrame.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        dragging = false
+    end
+end)
+
+RunService.RenderStepped:Connect(function()
+    if dragging then
+        local delta = game:GetService("UserInputService"):GetMouseLocation() - dragStart
+        HubFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+-- Volume Slider
+local VolumeSlider = Instance.new("TextButton", HubFrame)
+VolumeSlider.Size = UDim2.new(0.8, 0, 0, 30)
+VolumeSlider.Position = UDim2.new(0.1, 0, 0.2, 0)
+VolumeSlider.Text = "Set Master Volume"
+VolumeSlider.BackgroundColor3 = Color3.fromRGB(70, 70, 70)
+VolumeSlider.TextColor3 = Color3.new(1, 1, 1)
+VolumeSlider.TextScaled = true
+VolumeSlider.Font = Enum.Font.SourceSansBold
+
+VolumeSlider.MouseButton1Click:Connect(function()
+    local input = tonumber(PlayerGui:Prompt("Enter Volume (0 to 1):")) -- Use your method to get player input
+    if input then
+        AudioInjector.SetMasterVolume(input)
+    end
+end)
+
+-- Queue System
+local audioQueue = {}
+local processingQueue = false
+local masterVolume = 1
+
+-- Custom Memory Management
+local memoryPool = {}
+local currentMemoryIndex = 0
+
+-- Audio format settings
+local supportedFormats = {
+    [".ogg"] = true,
+    [".mp3"] = true
+}
+
+-- Utility Functions
+local function IsValidAudioFormat(fileName)
+    local extension = string.match(fileName, "%.%w+$")
+    return supportedFormats[extension] ~= nil
+end
+
+local function CreateCustomMemoryAddress()
+    currentMemoryIndex = currentMemoryIndex + 1
+    return "MEMORY_" .. currentMemoryIndex
+end
+
+-- Main Audio Injection Functions
+function AudioInjector.InjectAudio(audioId, options)
+    options = options or {}
+    local volume = options.volume or DEFAULT_VOLUME
+    local player = Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local rootPart = character:WaitForChild("HumanoidRootPart")
+
+    local sound = Instance.new("Sound")
+    sound.SoundId = "rbxassetid://" .. audioId
+    sound.Volume = volume * masterVolume
+    sound.Parent = rootPart
+    
+    return sound
+end
+
+function AudioInjector.SetMasterVolume(volume)
+    if type(volume) ~= "number" then return end
+    if volume < 0 or volume > 1 then return end
+    
+    masterVolume = volume
+    -- Update all active sounds
+    for _, sound in pairs(MEMORY_ADDRESSES) do
+        if sound:IsA("Sound") then
+            sound.Volume = sound.Volume / masterVolume * volume
+        end
+    end
+end
+
+function AudioInjector.AddToQueue(audioId, options)
+    if #audioQueue >= MAX_QUEUE_SIZE then
+        warn("Audio queue is full!")
+        return false
+    end
+    
+    table.insert(audioQueue, {
+        audioId = audioId,
+        options = options
+    })
+    
+    if not processingQueue then
+        AudioInjector.ProcessQueue()
+    end
+    
+    return true
+end
+
+function AudioInjector.ProcessQueue()
+    if processingQueue then return end
+    processingQueue = true
+    
+    local function processNext()
+        if #audioQueue == 0 then
+            processingQueue = false
+            return
+        end
+        
+        local audioData = table.remove(audioQueue, 1)
+        local sound = AudioInjector.InjectAudio(audioData.audioId, audioData.options)
+        
+        -- Process next item after current audio finishes
+        sound.Ended:Connect(function()
+            processNext()
+        end)
+        
+        sound:Play()
+    end
+    
+    processNext()
+end
+
+return AudioInjector
